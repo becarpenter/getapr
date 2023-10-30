@@ -22,16 +22,15 @@ indicating whether an NPTv6 or NAT66 translator is present.
 
 This code is a prototype. It does not cover all possible
 complications. It uses two randomly chosen Atlas probes
-as initial probe targets. Some features are missing so far:
+as initial probe targets. IPv6 is always preferred if
+available. A rolling average latency is recorded and used
+for sorting results. Some features are missing so far:
 
 1) Source addresses should be ignored if they stop working,
 to mitigate multihoming outages.
 
 2) The probe targets should be refreshed periodically, to
 spread load.
-
-3) IPv6 is always preferred if available. No attempt is made
-to prefer shorter latency.
 
 The prototype was  tested on Windows 10 and Linux 5.4.0,
 and it needs at least Python 3.9.
@@ -86,6 +85,8 @@ may be glitches.
 ########################################################
 
 # 20231002 first version
+# 20231030 latency measurement and sorting, add new
+#          destinations automatically
 
 
 import os
@@ -135,6 +136,21 @@ if os.name!="nt":
         "\nPlease install netifaces with pip or apt-get.")
         time.sleep(10)
         exit()
+        
+####################################################
+# Class to hold an address pair & telemetry data   #
+####################################################
+
+class _addr_pair:
+    """Address pair with properties"""
+    def __init__(self, sa, da, latency):
+        self.sa = sa  #source address (as ipaddress.ip_address)
+        self.da = da  #destination address (as ipaddress.ip_address)
+        self.latency = latency  # latency (ms)
+    def __repr__(self):
+        return repr((self.sa, self.da, self.latency))
+
+        
 
 ####################################################
 # Global initialisations                           #
@@ -146,7 +162,7 @@ _sa_list = []   #list of possible source addresses
 _da_list_lock = threading.Lock()
 _da_list = []   #list of destination addresses to test
 _pair_list_lock = threading.Lock()
-_pair_list = [] #list of successful address pairs
+_pair_list = [] #list of successful address pairs with latency
 
 _poll_count = 0 #keep track of polling
 _max_da = 10    #how big we allow the destination list to grow
@@ -156,8 +172,12 @@ _logging = True     #set when selective logging wanted
 _printing = False   #set if log printing wanted
 _getapr_initialised = False
 
-def_gateway4 = None
+def_gateway4 = None #default gateways
 def_gateway6 = None
+
+_timeout = 5        #timeout for connect attempts (s)
+_latency6 = 200     #default latency for IPv6 (ms)
+_latency4 = 250     #default latency for IPv4 (ms)
     
 NPTv6 = False       #NPTv6 or NAPT66 assumed absent by default
 NAT44 = False       #NAPT44 assumed absent by default
@@ -286,7 +306,7 @@ def _update_sources():
 
 
 def _ok(sa, da):
-    """Check address pair"""
+    """Check address pair. Return False if bad, latency in ms if OK"""
 
     global NPTv6, NAT44, NPTv6_tried, NAT44_tried, ULA_ok, GUA_ok, LLA_ok, IPv4_ok
     
@@ -318,8 +338,10 @@ def _ok(sa, da):
                     NPTv6_tried = True
             sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
             sock.bind((str(sa), 0, 0, zid))
-            sock.settimeout(5)
+            sock.settimeout(_timeout)
+            t0 = time.monotonic()
             sock.connect((str(da), 80, 0, zid))
+            latency = max(int((time.monotonic() - t0)*1000),1)
             if _is_ula(sa) and not _is_ula(da):
                 NPTv6 = True
             elif _is_ula(sa) and _is_ula(da):
@@ -336,8 +358,10 @@ def _ok(sa, da):
                     NAT44_tried = True          
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.bind((str(sa),0))
-            sock.settimeout(5)
+            sock.settimeout(_timeout)
+            t0 = time.monotonic()
             sock.connect((str(da), 80))
+            latency = max(int((time.monotonic() - t0)*1000),1)
             IPv4_ok = True
             if sa.is_private and not da.is_private:
                 NAT44 = True
@@ -345,7 +369,22 @@ def _ok(sa, da):
     except Exception as ex:
         #print("!connect", ex, sa, da)
         return(False)
-    return(True)
+    return(latency)
+
+def _in_pair_list(sa, da, remove = False, latency = False):
+    """Utility function for _poll"""
+    #called with pair list locked!
+    global _pair_list
+    for pr in _pair_list:
+        if sa == pr.sa and da == pr.da:
+            if remove:
+                _pair_list.remove(pr)
+            elif latency:
+                #fresh data, update rolling average
+                pr.latency = int((pr.latency + latency)/2)                 
+            return(pr)
+    return False
+
     
 class _poll(threading.Thread):
     """Poll SA/DA pairs"""
@@ -372,18 +411,17 @@ class _poll(threading.Thread):
                 _da_list_lock.release()
                 for da in da_list:
                     #print("Polling",sa,_a)
-
-                    if _ok(sa, da): #NB this call can take 5 seconds to timeout
+                    latency = _ok(sa, da) #NB this call can take 5 seconds to timeout
+                    if latency: 
                         #print("Poll OK")
                         _pair_list_lock.acquire()
-                        if (sa, da) not in _pair_list:
-                            _pair_list.append((sa, da))
+                        if not _in_pair_list(sa, da, latency = latency):
+                            _pair_list.append(_addr_pair(sa, da, latency))
                         _pair_list_lock.release()
                     else:
                         #print("Poll failed", sa, da)
                         _pair_list_lock.acquire()
-                        if (sa, da) in _pair_list:
-                            _pair_list.remove((_sa, _da))
+                        _in_pair_list(sa, da, remove = True)
                         _pair_list_lock.release()
 
                         #Should it have worked, according to flags?
@@ -442,7 +480,7 @@ class _monitor(threading.Thread):
                 _pair_list_lock.acquire()
                 _log("\nPair list:")
                 for _a in _pair_list:
-                    _log(_a)
+                    _log(str(_a.sa) +";"+ str(_a.da) +";"+ str(_a.latency))
                 _pair_list_lock.release()
 
                 _log("\nStatus:")
@@ -457,6 +495,7 @@ class _monitor(threading.Thread):
 ##                _da_list_lock.acquire()
 ##                _da_list += [ipaddress.IPv6Address("fd63:45eb:dc14:0:2e3a:fdff:fea4:dde7")]
 ##                                                    #replace with a locally valid ULA
+##                #print("added dest", _da_list[-1])
 ##
 ####                #...and destination list purging.
 ####                #If you uncomment this, there will be long delays
@@ -567,68 +606,91 @@ and is intended for debugging."""
             if known_da:
                 #look for and suggest known pairs
                 for pair in pl:
-                    if pair[1] == da:
+                    if pair.da == da:
                         reply.append(pair)
                         this_da_found = True
-                        
+                       
             if not this_da_found:
                 #not yet in destination list, so check against flags
+                #and add if suitable
                 
                 #first, grab a copy of the source list
                 _sa_list_lock.acquire()
                 sl = copy.copy(_sa_list) #!deepcopy fails on LLA
                 _sa_list_lock.release()
-                
+
+                useful = False
                 if da.version == 6:
                     if da.is_global and GUA_ok:
-                        #suggest GUA sources
+                        #suggest GUA sources with default latency
                         for sa in sl:
                             if sa.version == 6 and sa.is_global:
-                                reply.append((sa, da))
-                    if (da.is_global and NPTv6) or _is_ula(da):
-                        #suggest ULA sources
+                                reply.append(_addr_pair(sa, da, _latency6))
+                                useful = True
+                    if _is_ula(da):
+                        #suggest ULA sources with tuned latency
                         for sa in sl:
                             if sa.version == 6 and _is_ula(sa):
-                                reply.append((sa, da))
+                                reply.append(_addr_pair(sa, da, _latency6-1))
+                                useful = True
+                    if da.is_global and NPTv6:
+                        #suggest ULA sources with translation and tuned latency
+                        for sa in sl:
+                            if sa.version == 6 and _is_ula(sa):
+                                reply.append(_addr_pair(sa, da, _latency6+1))
+                                useful = True
                     if da.is_link_local and LLA_ok:
-                        #suggest LLA sources
+                        #suggest LLA sources with minimal latency
                         for sa in sl:
                             if sa.version == 6 and sa.is_link_local and sa.scope_id == da.scope_id:
-                                reply.append((sa, da))
+                                reply.append(_addr_pair(sa, da, 1)) 
+                                useful = True
                 if da.version == 4:
                     if (da.is_global and NAT44) or da.is_private:
-                        #suggest RFC1918 sources
+                        #suggest RFC1918 sources with default latency
                         for sa in sl:
                             if sa.version == 4 and sa.is_private:
-                                reply.append((sa, da))
+                                reply.append(_addr_pair(sa, da, _latency4))
+                                useful = True
                     elif da.is_global and IPv4_ok:
-                        #suggest global IPv4 sources
+                        #suggest global IPv4 sources with default latency
                         for sa in sl:
                             if sa.version == 4 and sa.is_global:
-                                reply.append((sa, da))
+                                reply.append(_addr_pair(sa, da, _latency4))
+                                useful = True
                     if da.is_link_local:
-                        #suggest LLA sources
+                        #suggest LLA sources with minimal latency +1
                         for sa in sl:
                             if sa.version == 4 and sa.is_link_local:
-                                reply.append((sa, da))    
+                                reply.append(_addr_pair(sa, da, 2)) 
+                                useful = True
+                if useful:
+                    #add to destination list
+                    _da_list_lock.acquire()
+                    _da_list.append(da)
+                    _da_list_lock.release()
+
+    # sort replies on higher IP version and lower latency
+    if reply:
+        reply.sort(key = lambda p: (-p.sa.version, p.latency))
 
     # construct (AF, SA, DA) triples
     if reply:
         for i, pair in enumerate(reply):
-            if pair[0].version == 6:
-                if pair[0].is_link_local:    
+            if pair.sa.version == 6:
+                if pair.sa.is_link_local:    
                     #must split interface index off
-                    da, zid = str(pair[1]).split("%")
+                    da, zid = str(pair.da).split("%")
                     if os.name=="nt":
                         zid = eval(zid) #Windows: convert to numeric
                     else:
                         zid = socket.if_nametoindex(zid) #POSIX: convert to numeric                   
                 else:
                     zid = 0
-                    da = pair[1]
-                reply[i] = (socket.AF_INET6, (str(pair[0]),0,0,zid), (str(da), port, 0 ,zid))
+                    da = pair.da
+                reply[i] = (socket.AF_INET6, (str(pair.sa),0,0,zid), (str(da), port, 0 ,zid))
             else:
-                reply[i] = (socket.AF_INET, (str(pair[0]),0), (str(pair[1]), port))
+                reply[i] = (socket.AF_INET, (str(pair.sa),0), (str(pair.da), port))
                 
     return(reply)
 

@@ -30,16 +30,15 @@ DESCRIPTION
     
     This code is a prototype. It does not cover all possible
     complications. It uses two randomly chosen Atlas probes
-    as initial probe targets. Some features are missing so far:
-    
+    as initial probe targets. IPv6 is always preferred if
+    available. A rolling average latency is recorded and used
+    for sorting results. Some features are missing so far:
+
     1) Source addresses should be ignored if they stop working,
     to mitigate multihoming outages.
-    
+
     2) The probe targets should be refreshed periodically, to
     spread load.
-    
-    3) IPv6 is always preferred if available. No attempt is made
-    to prefer shorter latency.
     
     The prototype was  tested on Windows 10 and Linux 5.4.0,
     and it needs at least Python 3.9.
