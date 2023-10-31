@@ -87,6 +87,7 @@ may be glitches.
 # 20231002 first version
 # 20231030 latency measurement and sorting, add new
 #          destinations automatically
+# 20231101 fix bug in exception handling
 
 
 import os
@@ -574,7 +575,7 @@ and is intended for debugging."""
             try:
                 ainf = socket.getaddrinfo(target, port)
             except Exception as ex:
-                if 'getaddrinfo failed' in ex:
+                if 'getaddrinfo failed' in str(ex):
                     return(reply)   #NXDOMAIN, so return nothing
                 else:
                     raise(ex)       #something else, so re-raise it
