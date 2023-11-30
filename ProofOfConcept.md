@@ -157,7 +157,7 @@ That can be read as a policy table, but it only takes effect in the absence of m
 
 ### Shortfalls
     
-This code is a prototype and does not cover all possible complications  Some features are missing so far:
+This code is a prototype and does not cover all possible complications. Some features are missing so far:
 
 1. Source addresses should be ignored if they stop working, to mitigate unplanned outages.
 
