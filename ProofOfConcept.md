@@ -16,7 +16,7 @@ The implementation is coded in Python 3 and runs in user space. The module, name
 
 The user is provided with three functions:
 
-1. `get_addr_pairs(target, port)`, which is intended to be used instead of `getaddrinfo()`. Instead of returning a list of destination addresses, it returns a list of source and destination address pairs. In practice, it actually returns a list of (AF, SA, DA) 3-tuples, where the first parameter identifies the address family of the addresses. The addresses are returned as tuples that can be passed directly to `bind()` and `connect()`. For example,  
+1\. `get_addr_pairs(target, port)`, which is intended to be used instead of `getaddrinfo()`. Instead of returning a list of destination addresses, it returns a list of source and destination address pairs. In practice, it actually returns a list of (AF, SA, DA) 3-tuples, where the first parameter identifies the address family of the addresses. The addresses are returned as tuples that can be passed directly to `bind()` and `connect()`. For example,  
 
 ~~~       
     pairs = get_addr_pairs("www.example.com", 80)
@@ -27,13 +27,13 @@ The user is provided with three functions:
         user_sock.connect(DA)
 ~~~
 
-  Note that this code fragment automatically selects IPv4 or IPv6.  
+  Note that this code fragment automatically selects IPv4 or IPv6 via the AF value.  
 
   The port parameter is used only to build the appropriate DA tuple. The user is strongly recommended to try the address pairs in sequence (not shown in this example).
     
-2. `init_getapr()`, which initialises the state information and asynchronous processes used by    `get_addr_pairs()`. This initialisation takes at least 10 seconds including network probes. If the user does not call this function, it will be called automatically on the first call to `get_addr_pairs()`.
+2\. `init_getapr()`, which initialises the state information and asynchronous processes used by    `get_addr_pairs()`. This initialisation takes at least 10 seconds including network probes. If the user does not call this function, it will be called automatically on the first call to `get_addr_pairs()`.
     
-3. `status()`, which returns a Python dictionary indicating the detected connectivity status. For example, the status element `NPTv6` is a Boolean indicating whether an NPTv6 (or NAT66) translator was detected.
+3\. `status()`, which returns a Python dictionary indicating the detected connectivity status. For example, the status element `NPTv6` is a Boolean indicating whether an NPTv6 (or NAT66) translator was detected.
 
 The prototype was  tested on Windows 10 and Linux 5.4.0, and it needs at least Python 3.9.
 
@@ -69,7 +69,7 @@ When the package is initialized (by calling `init_getapr()` or by the first call
 
 ### Polling Thread
 
-The role of `_poll` is to repeatedly poll (SA, DA) pairs to verify whether they work, i.e. whether it is in fact possible to successfully open a connection from SA to DA. Its main code is repeated every ten seconds.
+The role of `_poll` is to repeatedly poll (SA, DA) pairs to verify whether they work, i.e. whether it is in fact possible to successfully open a connection from SA to DA. Its main loop is repeated every ten seconds, plus waiting time when testing network connections.
 
 The `_poll` thread loops across all possible (SA, DA) pairs from `_sa_list` and `_da_list`, discards those that are intrinsically impossible, and actively tests each pair that is theoretically possible. Currently the test is an attempted TCP connection on port 80. (Clearly, that could be improved.) The duration of a successful `connect()` call is recorded as the latency.
 
@@ -108,13 +108,13 @@ The main purposes of `_monitor` are:
 
 2. Periodically garbage-collect `_da_list`, by deleting the oldest ones (but not the ATLAS probes or the default gateways).
 
-The `_monitor` thread also generates log output when logging is enabled.
+The `_monitor` thread also generates log output when logging is enabled. Its main loop is repeated every ten seconds.
 
 ### Get Address Pairs Function
 
-The user of `get_addr_pairs()` may supply either an IP address or an FQDN. The function returns an ordered list of suggested source and destination address pairs, in a format easily used for standard socket calls. If the user provides an FQDN, the code uses `getaddrinfo()` to perform DNS lookup and build a list of destination addresses (DAs). If the user provides an IP address, the list will contain only that DA. In either case, 
+The user of `get_addr_pairs()` may supply either an IP address or an FQDN. The function returns an ordered list of suggested source and destination address pairs, in a format easily used for standard socket calls. If the user provides an FQDN, the code uses `getaddrinfo()` to perform DNS lookup and build a list of destination addresses (DAs). If the user provides an IP address, the list will contain only that DA. 
 
-For each such DA, the code then checks if it is in `_da_list`. 
+In either case, for each listed DA, the code checks if it is in `_da_list`. 
 
  - If it is present, the code checks `_pair_list` and extracts all listed address pairs with this DA; these are added to the list to be returned to the caller of `get_addr_pairs()`. In this case, the user will receive a list of (SA, DA) pairs which have already been tested successfully.
 
