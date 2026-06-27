@@ -15,7 +15,12 @@ DESCRIPTION
     operating system choosing an inappropriate source address.
     Nevertheless, upper layer code needs to cycle through the list
     of address pairs until it makes a successful connection.
-    
+
+    The module also provided getapr.getaddrinfo() which works
+    exactly like socket.getaddrinfo() except that it orders the
+    destination addresses using get_addr_pairs(). In many cases,
+    this will have the same effect as using get_addr_pairs().
+
     The module also provides getapr.init_getapr() which initialises
     the state information and asynchronous processes used by
     get_addr_pairs(). This initialisation will take at least
@@ -73,6 +78,16 @@ FUNCTIONS
         
         The optional 'printing' parameter controls informational printing
         and is intended for debugging.
+
+    getaddrinfo(
+        host,
+        port,
+        family=<AddressFamily.AF_UNSPEC: 0>,
+        type=0,
+        proto=0,
+        flags=0
+    )
+        The same as socket.getaddrinfo() but returns answers ordered as per get_addr_pairs()
     
     init_getapr(printing=False)
         Initialise data and threads for source address detection and

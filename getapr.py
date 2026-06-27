@@ -8,6 +8,11 @@ operating system choosing an inappropriate source address.
 Nevertheless, upper layer code needs to cycle through the list
 of address pairs until it makes a successful connection.
 
+The module also provided getapr.getaddrinfo() which works
+exactly like socket.getaddrinfo() except that it orders the
+destination addresses using get_addr_pairs(). In many cases,
+this will have the same effect as using get_addr_pairs().
+
 The module also provides getapr.init_getapr() which initialises
 the state information and asynchronous processes used by
 get_addr_pairs(). This initialisation will take at least
@@ -32,8 +37,14 @@ to mitigate multihoming outages.
 2) The probe targets should be refreshed periodically, to
 spread load.
 
+3) Should use some level of longest match to rank new
+destination addresses
+
+4) Should have a mode that is more HE-like than "always
+prefer IPv6".
+
 The prototype was  tested on Windows 10 and Linux 5.4.0,
-and it needs at least Python 3.9.
+and it needs at least Python 3.9 (tested up to 3.14).
 
 Note for programmers: The handling of interface (a.k.a. scope
 or zone) identifiers is very different between the Windows
@@ -45,7 +56,7 @@ may be glitches.
 ########################################################
 # Released under the BSD "Revised" License as follows:
 #                                                     
-# Copyright (C) 2023 Brian E. Carpenter.                  
+# Copyright (C) 2023-26 Brian E. Carpenter.                  
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with
@@ -88,6 +99,7 @@ may be glitches.
 # 20231030 latency measurement and sorting, add new
 #          destinations automatically
 # 20231101 fix bug in exception handling
+# 20260627 add getaddrinfo() version
 
 
 import os
@@ -774,7 +786,19 @@ def status():
     return({"GUA_ok": GUA_ok, "ULA_ok": ULA_ok, "LLA_ok": LLA_ok, "IPv4_ok": IPv4_ok,
      "ULA_present": ULA_present, "NPTv6": NPTv6, "RFC1918": RFC1918, "NAT44": NAT44})
 
+def getaddrinfo(host, port, family=socket.AF_UNSPEC, type=0, proto=0, flags=0):
+    """The same as socket.getaddrinfo() but returns answers ordered as per get_addr_pairs()"""
 
+    if family != socket.AF_UNSPEC or type or proto or flags:
+        # not a simple dual stack call, just process it normally
+        return(socket.getaddrinfo(host, port, family, type, proto, flags))
+    # invoke address pair mechansim
+    pairs = get_addr_pairs(host, port)
+    # convert to traditional form (i.e. discard source addresses)
+    reply = []
+    for pair in pairs:
+        reply.append((pair[0], 0, 0, '', pair[2]))
+    return(reply)
                 
 
 
