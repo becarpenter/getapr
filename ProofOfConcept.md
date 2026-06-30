@@ -10,7 +10,7 @@ The implementation is coded in Python 3 and runs in user space. The module, name
 
 3. Information gleaned for one application cannot be re-used by another.
 
-4. No access to kernel data within the IPv6 and IPv6 stacks.
+4. No access to kernel data within the IPv6 and IPv4 stacks.
 
 ## User interface
 
