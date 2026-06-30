@@ -27,27 +27,31 @@ DESCRIPTION
     10 seconds and includes network probes. If the user does not
     call this function, it will be called automatically by the
     first call to get_addr_pairs().
-    
+
     The module also provides getapr.status() which returns a
     Python dictionary indicating the detected connectivity
     status. For example, getapr.status()['NPTv6'] is a Boolean
     indicating whether an NPTv6 or NAT66 translator is present.
-    
+
     This code is a prototype. It does not cover all possible
     complications. It uses two randomly chosen Atlas probes
-    as initial probe targets. IPv6 is always preferred if
-    available. A rolling average latency is recorded and used
-    for sorting results. Some features are missing so far:
+    as initial probe targets. To spread load, new Atlas
+    probes are picked every 10 minutes. The overall list
+    of destination addresses is trimmed to a maximum size.
 
-    1) Source addresses should be ignored if they stop working,
-    to mitigate multihoming outages.
+    A rolling average round-trip latency is recorded and used
+    for sorting results. In the sort, IPv6 is preferred as long
+    is is less than 5 msec slower than IPv4.
 
-    2) The probe targets should be refreshed periodically, to
-    spread load.
-    
-    The prototype was  tested on Windows 10 and Linux 5.4.0,
-    and it needs at least Python 3.9.
-    
+    New destination addresses are normally assigned a default
+    starting latency. However, if a known destination matches
+    the new one in the top 32 bits (IPv6) or 20 bits (IPv4), its
+    existing latency is used for the new one, to reflect their
+    probable topological closeness.
+
+    The prototype was  tested on Windows 10 and 11, and Linux 5.4.0,
+    and it needs at least Python 3.9 (tested up to 3.14).
+
     Note for programmers: The handling of interface (a.k.a. scope
     or zone) identifiers is very different between the Windows
     and POSIX socket APIs. The code attempts to handle link local
@@ -63,41 +67,36 @@ FUNCTIONS
         or socket.AF_INET6 and can be passed directly to socket.socket().
         The addresses are returned as tuples that can be passed directly to
         socket.bind() and socket.connect(). For example,
-        
+
             pairs = get_addr_pairs("www.example.com", 80)
             if pairs:
                 AF, SA, DA = pairs[0]
                 user_sock = socket.socket(AF, socket.SOCK_STREAM)
                 user_sock.bind(SA)
                 user_sock.connect(DA)
-        
+
         The port parameter is used only to build the appropriate DA tuple.
-        
+
         The user is strongly recommended to try the address pairs in sequence.
         IPv6 addresses always come first if available.
-        
+
         The optional 'printing' parameter controls informational printing
         and is intended for debugging.
 
-    getaddrinfo(
-        host,
-        port,
-        family=<AddressFamily.AF_UNSPEC: 0>,
-        type=0,
-        proto=0,
-        flags=0
-    )
+    getaddrinfo(host, port, family=<AddressFamily.AF_UNSPEC: 0>,
+        type=0, proto=0, flags=0)
+ 
         The same as socket.getaddrinfo() but returns answers ordered as per get_addr_pairs()
-    
+
     init_getapr(printing=False)
         Initialise data and threads for source address detection and
         destination probing.
-        
+
         The optional 'printing' parameter controls informational printing
         and is intended for debugging.
-        
+
         Initialisation takes at least 10 seconds and includes network probes.
-    
+
     status()
         Returns dictionary showing detected connectivity status.
 

@@ -27,23 +27,21 @@ indicating whether an NPTv6 or NAT66 translator is present.
 
 This code is a prototype. It does not cover all possible
 complications. It uses two randomly chosen Atlas probes
-as initial probe targets. IPv6 is always preferred if
-available. A rolling average latency is recorded and used
-for sorting results. Some features are missing so far:
+as initial probe targets. To spread load, new Atlas
+probes are picked every 10 minutes. The overall list
+of destination addresses is trimmed to a maximum size.
 
-1) Source addresses should be ignored if they stop working,
-to mitigate multihoming outages.
+A rolling average round-trip latency is recorded and used
+for sorting results. In the sort, IPv6 is preferred as long
+is is less than 5 msec slower than IPv4.
 
-2) The probe targets should be refreshed periodically, to
-spread load.
+New destination addresses are normally assigned a default
+starting latency. However, if a known destination matches
+the new one in the top 32 bits (IPv6) or 20 bits (IPv4), its
+existing latency is used for the new one, to reflect their
+probable topological closeness.
 
-3) Should use some level of longest match to rank new
-destination addresses
-
-4) Should have a mode that is more HE-like than "always
-prefer IPv6".
-
-The prototype was  tested on Windows 10 and Linux 5.4.0,
+The prototype was  tested on Windows 10 and 11, and Linux 5.4.0,
 and it needs at least Python 3.9 (tested up to 3.14).
 
 Note for programmers: The handling of interface (a.k.a. scope
@@ -100,7 +98,10 @@ may be glitches.
 #          destinations automatically
 # 20231101 fix bug in exception handling
 # 20260627 add getaddrinfo() version
-
+# 20260629 purge obsolete source addresses,
+#          5 ms bias towards IPv6 instead of absolute preference
+# 20260630 latency of known destination used for topologically
+#          close new destination
 
 import os
 import time
@@ -178,7 +179,7 @@ _pair_list_lock = threading.Lock()
 _pair_list = [] #list of successful address pairs with latency
 
 _poll_count = 0 #keep track of polling
-_max_da = 10    #how big we allow the destination list to grow
+_max_da = 20    ### how big the destination list may grow
 
 _test_done = False  #used for a one-time-through test mode
 _logging = True     #set when selective logging wanted
@@ -188,9 +189,10 @@ _getapr_initialised = False
 def_gateway4 = None #default gateways
 def_gateway6 = None
 
-_timeout = 5        #timeout for connect attempts (s)
-_latency6 = 200     #default latency for IPv6 (ms)
-_latency4 = 250     #default latency for IPv4 (ms)
+_timeout = 5        ### timeout for connect attempts (s) 
+_latency6 = 200     ### default latency for IPv6 (ms) 
+_latency4 = 205     ### default latency for IPv4 (ms) 
+_bias6 = 5          ### bias in favour of IPv6 (ms) 
     
 NPTv6 = False       #NPTv6 or NAPT66 assumed absent by default
 NAT44 = False       #NAPT44 assumed absent by default
@@ -233,6 +235,31 @@ def _is_ula(a):
     """Test for ULA"""
     return (str(a).startswith('fd') or str(a).startswith('fc'))
 
+def _pick_probes():
+    """Pick 2 random Atlas probes"""
+    _target6 = None
+    _target4 = None
+    for _i in range(1,10):
+        _tryp = _prng.randint(6000, 7200)
+        try:
+            _probe = Probe(id=_tryp)
+            if _probe.is_anchor and _probe.status == 'Connected' and _probe.address_v6:
+                _target6 = ipaddress.IPv6Address(_probe.address_v6)
+                break
+        except:
+            pass
+    for _i in range(1,10):
+        _tryp = _prng.randint(6000, 7200)
+        try:
+            _probe = Probe(id=_tryp)
+            if _probe.is_anchor and _probe.status == 'Connected' and _probe.address_v4:
+                _target4 = ipaddress.IPv4Address(_probe.address_v4)
+                break
+        except:
+            pass
+
+    return(_target6, _target4)
+
 def _update_sources():
     """Find current available source addresses"""
 ####################################################
@@ -240,6 +267,7 @@ def _update_sources():
 ####################################################
     global _sa_list, _sa_list_lock, ULA_present, RFC1918, def_gateway4, def_gateway6
     _sa_list_lock.acquire()
+    old_sa_list = _sa_list
     _sa_list = []   # Empty list of source addresses
     if os.name=="nt":
         #This only works on Windows              
@@ -314,14 +342,30 @@ def _update_sources():
             def_gateway6 = ipaddress.IPv6Address(_gwa+"%"+_zid)        
         except:
             pass
-                        
+
+    # Determine any vanished source addresses
+    purge_list = []
+    for a in old_sa_list:
+        if not a in _sa_list:
+            purge_list.append(a)                   
     _sa_list_lock.release()
+
+    # Purge any obsolete address pairs
+    if purge_list:
+        _pair_list_lock.acquire()
+        for p in _pair_list:
+            if p.sa in purge_list:
+                _pair_list.remove(p)
+        _pair_list_lock.release()
 
 
 def _ok(sa, da):
     """Check address pair. Return False if bad, latency in ms if OK"""
 
     global NPTv6, NAT44, NPTv6_tried, NAT44_tried, ULA_ok, GUA_ok, LLA_ok, IPv4_ok
+
+    if not da:
+        return(False)   #skip blank entries in _da_list
     
     if sa.version != da.version:
         return(False)   #never try NAT46 or NAT64
@@ -483,7 +527,7 @@ class _monitor(threading.Thread):
         global _sa_list, _da_list, _pair_list, _poll_count
         global _sa_list_lock, _da_list_lock, _pair_list_lock
         global _logging, _test_done
-        
+        global target6, target4
 
         while True:
             time.sleep(10)
@@ -532,20 +576,57 @@ class _monitor(threading.Thread):
 ##                _test_done = True
 
             if not _poll_count%6:
-                #regenerate source list
+                #regenerate source list every minute
                 _update_sources()
-                #trim oldest entries in destination list
+                #trim oldest entries in destination list every minute
                 _da_list_lock.acquire()
                 while len(_da_list) > _max_da:
                     for _da in _da_list:
                         if not _da in (target6, target4, def_gateway6, def_gateway4):
                             _da_list.remove(_da)
                             break
-                _da_list_lock.release()                    
-                
+                _da_list_lock.release()
+
+
+            if not _poll_count%60:
+                # get new Atlas probes and add to destination list every 10 minutes
+                target6n, target4n = _pick_probes()
+                print("Adding probes", target6n, target4n)
+                _da_list_lock.acquire()
+                if target6n:
+                    _da_list.append(target6n)
+                    target6 = target6n
+                if target4n:
+                    _da_list.append(target4n)
+                    target4 = target4n
+                _da_list_lock.release()            
 
             if _poll_count < 3 or not _poll_count%10:
                 _logging = True
+
+def _lmatch(a1, a2):
+    # do two addresses match enough to copy latency?
+    #print("Matching",a1,a2)
+    if a1.version == a2.version:
+        if a1.version == 6:
+            return(a1.packed[:4] == a2.packed[:4]) #32 bit match
+        else:
+            return(int(a1) & 0xfffff000 == int(a2) & 0xfffff000) #20 bit match    
+    return False
+
+def _latency(da, pl):
+    # return latency guess
+    _latency6 if da.version == 6 else _latency4
+    for pr in pl:   #this is a safe copy of the pair list, no lock needed
+        if _lmatch(da, pr.da):
+            _log("Latency match", da)
+            return(pr.latency)
+    return(_latency6 if da.version == 6 else _latency4)
+
+def _bias(v):
+    # return bias in favour of IPv6
+    global _bias6
+    return 4 if v == 4 else 4 + _bias6
 
 def get_addr_pairs(target, port, printing = False):
     """Get source and destination address pairs for the target host.
@@ -626,8 +707,12 @@ and is intended for debugging."""
             if not this_da_found:
                 #not yet in destination list, so check against flags
                 #and add if suitable
+
+                #get best guess at latency
+
+                latency_guess = _latency(da, pl)
                 
-                #first, grab a copy of the source list
+                #grab a copy of the source list
                 _sa_list_lock.acquire()
                 sl = copy.copy(_sa_list) #!deepcopy fails on LLA
                 _sa_list_lock.release()
@@ -638,19 +723,19 @@ and is intended for debugging."""
                         #suggest GUA sources with default latency
                         for sa in sl:
                             if sa.version == 6 and sa.is_global:
-                                reply.append(_addr_pair(sa, da, _latency6))
+                                reply.append(_addr_pair(sa, da, latency_guess))
                                 useful = True
                     if _is_ula(da):
                         #suggest ULA sources with tuned latency
                         for sa in sl:
                             if sa.version == 6 and _is_ula(sa):
-                                reply.append(_addr_pair(sa, da, _latency6-1))
+                                reply.append(_addr_pair(sa, da, latency_guess-1))
                                 useful = True
                     if da.is_global and NPTv6:
                         #suggest ULA sources with translation and tuned latency
                         for sa in sl:
                             if sa.version == 6 and _is_ula(sa):
-                                reply.append(_addr_pair(sa, da, _latency6+1))
+                                reply.append(_addr_pair(sa, da, latency_guess+1))
                                 useful = True
                     if da.is_link_local and LLA_ok:
                         #suggest LLA sources with minimal latency
@@ -663,13 +748,13 @@ and is intended for debugging."""
                         #suggest RFC1918 sources with default latency
                         for sa in sl:
                             if sa.version == 4 and sa.is_private:
-                                reply.append(_addr_pair(sa, da, _latency4))
+                                reply.append(_addr_pair(sa, da, latency_guess))
                                 useful = True
                     elif da.is_global and IPv4_ok:
                         #suggest global IPv4 sources with default latency
                         for sa in sl:
                             if sa.version == 4 and sa.is_global:
-                                reply.append(_addr_pair(sa, da, _latency4))
+                                reply.append(_addr_pair(sa, da, latency_guess))
                                 useful = True
                     if da.is_link_local:
                         #suggest LLA sources with minimal latency +1
@@ -680,13 +765,15 @@ and is intended for debugging."""
                 if useful:
                     #add to destination list
                     _da_list_lock.acquire()
-                    _da_list.append(da)
+                    if not da in _da_list:
+                        _da_list.append(da)
                     _da_list_lock.release()
 
-    # sort replies on higher IP version and lower latency
+    # sort replies on IP version and lower latency
     if reply:
-        reply.sort(key = lambda p: (-p.sa.version, p.latency))
-
+        #reply.sort(key = lambda p: (-p.sa.version, p.latency)) # IPv6 always wins
+        reply.sort(key = lambda p: (-_bias(p.sa.version) + p.latency)) # IPv6 gets advantage
+        
     # construct (AF, SA, DA) triples
     if reply:
         for i, pair in enumerate(reply):
@@ -729,45 +816,25 @@ Initialisation takes at least 10 seconds and includes network probes."""
     #(ideally we'd repeat this every half hour to
     #spread the probes around the world)
 
-    _log("Choosing probe targets; may take a minute...")
-    target6 = None
-    target4 = None
-    for _i in range(1,10):
-        _tryp = _prng.randint(6000, 7200)
-        try:
-            _probe = Probe(id=_tryp)
-            if _probe.is_anchor and _probe.status == 'Connected' and _probe.address_v6:
-                target6 = ipaddress.IPv6Address(_probe.address_v6)
-                break
-        except:
-            pass
-    for _i in range(1,10):
-        _tryp = _prng.randint(6000, 7200)
-        try:
-            _probe = Probe(id=_tryp)
-            if _probe.is_anchor and _probe.status == 'Connected' and _probe.address_v4:
-                target4 = ipaddress.IPv4Address(_probe.address_v4)
-                break
-        except:
-            pass
-
+    _log("Choosing initial probe targets; may take a minute...")
+    target6, target4 = _pick_probes()
     #in case things are desparate...
     if not target6:
-        target6 = ipaddress.IPv6Address("2a00:dd80:3c::b3f") #ipv6.lookup.test-ipv6.com
+        target6 = ipaddress.IPv6Address(socket.getaddrinfo("ipv6.lookup.test-ipv6.com",80)[0][4][0])
+        _log("Couldn't get IPv6 probe target, using ipv6.lookup.test-ipv6.com")
     if not target4:
-        target4 = ipaddress.IPv4Address("216.218.223.250") #ipv4.lookup.test-ipv6.com
+        target4 = ipaddress.IPv4Address(socket.getaddrinfo("ipv4.lookup.test-ipv6.com",80)[0][4][0])
+        _log("Couldn't get IPv4 probe target, using ipv4.lookup.test-ipv6.com")
         
     _log("...chose", target6, "and", target4)
      
     _update_sources()
 
     _da_list_lock.acquire()
-    _da_list.append(target6)
+    _da_list.append(def_gateway6)  # first two entries are default gateways
+    _da_list.append(def_gateway4)  # (zero if none found)
+    _da_list.append(target6)       # next two entries are the initial Atlas probes
     _da_list.append(target4)
-    if def_gateway6:
-        _da_list.append(def_gateway6)
-    if def_gateway4:
-        _da_list.append(def_gateway4)
     _da_list_lock.release()
 
     _log_lists()

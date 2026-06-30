@@ -1,6 +1,6 @@
 # Python Proof of Concept for Get Address Pairs
 
-This section describes a proof-of-concept implementation of a function to provide a socket-level replacement for `getaddrinfo()` that, instead of returning a list of possible destination addresses, returns a list of possible (source, destination) address pairs. These pairs are ordered according to a specific policy, but the upper layer (whether it is a transport protocol or an application program) is expected to try the address pairs in sequence.
+This section describes a proof-of-concept implementation of a function to provide a socket-level replacement for `getaddrinfo()` that, instead of returning a list of possible destination addresses, returns a list of possible (source, destination) address pairs. These pairs are ordered according to a specific policy, but the upper layer (whether it is a transport protocol or an application program) is expected to try the address pairs in sequence. They are sorted based on observed or estimated round-trip latency, providing functionality similar to Happy Eyeballs, with a slight (5 msec) bias towards IPv6.. 
 
 The implementation is coded in Python 3 and runs in user space. The module, named `getapr`, therefore has several limitations:
 
@@ -10,11 +10,11 @@ The implementation is coded in Python 3 and runs in user space. The module, name
 
 3. Information gleaned for one application cannot be re-used by another.
 
-4. No access to kernel data within the IPv6 and IPv4 stacks.
+4. No access to kernel data within the IPv6 and IPv6 stacks.
 
 ## User interface
 
-The user is provided with three functions:
+The user is provided with four functions:
 
 1\. `get_addr_pairs(target, port)`, which is intended to be used instead of `getaddrinfo()`. Instead of returning a list of destination addresses, it returns a list of source and destination address pairs. In practice, it actually returns a list of (AF, SA, DA) 3-tuples, where the first parameter identifies the address family of the addresses. The addresses are returned as tuples that can be passed directly to `bind()` and `connect()`. For example,  
 
@@ -34,6 +34,8 @@ The user is provided with three functions:
 2\. `init_getapr()`, which initialises the state information and asynchronous processes used by    `get_addr_pairs()`. This initialisation takes at least 10 seconds including network probes. If the user does not call this function, it will be called automatically on the first call to `get_addr_pairs()`.
     
 3\. `status()`, which returns a Python dictionary indicating the detected connectivity status. For example, the status element `NPTv6` is a Boolean indicating whether an NPTv6 (or NAT66) translator was detected.
+
+4\. `getaddrinfo()`, which is specified exactly like `socket.getaddrinfo()` but sorts results just like `get_addr_pairs()`.
 
 The prototype was  tested on Windows 10 and Linux 5.4.0, and it needs at least Python 3.9.
 
@@ -57,7 +59,7 @@ The most important data structures are:
 
 When the package is initialized (by calling `init_getapr()` or by the first call to `get_addr_pairs()`), the following actions occur:
 
-1. Two probe targets, an IPv6 address and an IPv4 address, to be used as the basic targets for polling global IP access. The probes are currently chosen at random from the [RIPE ATLAS probe system](https://atlas.ripe.net/). Note that _data_ from ATLAS probes may not be used for commercial purposes without [permission](https://atlas.ripe.net/get-involved/commercial-use/), but `getapr` does not access such data. The addresses of these targets are loaded into `_da_list`, the list of destination addresses. They are used as validated global targets for the `_poll` thread.
+1. Two probe targets, an IPv6 address and an IPv4 address, to be used as the initial targets for polling global IP access. The probes are currently chosen at random from the [RIPE ATLAS probe system](https://atlas.ripe.net/). Note that _data_ from ATLAS probes may not be used for commercial purposes without [permission](https://atlas.ripe.net/get-involved/commercial-use/), but `getapr` does not access such data. The addresses of these targets are loaded into `_da_list`, the list of destination addresses. They are used as validated global targets for the `_poll` thread.
 
 2. Default gateways for IPv6 and IPv4 are determined and their addresses are loaded into `_da_list`. They are used as validated local targets for the `_poll` thread. (Very typically, they will be a LLA for IPv6 and an RFC1918 address for IPv4.)
 
@@ -106,7 +108,9 @@ The main purposes of `_monitor` are:
 
 1. Periodically refresh `_sa_list`, the list of possible source addresses, for example to delete addresses belonging to an interface that has gone down, or to add addresses for a newly eanabled interface. (In a kernel implementation, this could be done immediately instead of periodically.)
 
-2. Periodically garbage-collect `_da_list`, by deleting the oldest ones (but not the ATLAS probes or the default gateways).
+2. Periodically garbage-collect `_da_list`, by deleting the oldest ones (but not the default gateways).
+
+3. Periodically select new Atlas probes as targets, to spread load.
 
 The `_monitor` thread also generates log output when logging is enabled. Its main loop is repeated every ten seconds.
 
@@ -118,7 +122,9 @@ In either case, for each listed DA, the code checks if it is in `_da_list`.
 
  - If it is present, the code checks `_pair_list` and extracts all listed address pairs with this DA; these are added to the list to be returned to the caller of `get_addr_pairs()`. In this case, the user will receive a list of (SA, DA) pairs which have already been tested successfully.
 
- - If it is _not_ present, the DA is added to `_da_list`, so that future iterations of `_poll` will test it. Also, the code applies a series of rules in order to select suitable source addresses (SAs). For IPv6:
+ - If it is _not_ present, the DA is added to `_da_list`, so that future iterations of `_poll` will test it.
+
+ - Then, the code applies a series of rules in order to select suitable source addresses (SAs). For IPv6:
 
 ~~~
     if (DA is GUA) and GUA_ok:
@@ -142,36 +148,32 @@ For IPv4:
         suggest all IPv4 link-locals in _sa_list
 ~~~
 
-Then, the user will receive the sequence of (SA, DA) pairs generated by the above process, sorted by higher IP version and lower latency. For the pairs selected by rule, a synthetic latency value is used as a tie breaker, as follows:
+Then, the user will receive the sequence of (SA, DA) pairs generated by the above process, sorted by higher IP version and lower latency. For the pairs selected by rule, a synthetic latency value is used, as follows:
 
 ~~~
     GUA -> GUA:   200 ms
     ULA -> ULA:   199 ms
     ULA -> GUA:   201 ms
     LLA -> LLA:     1 ms
-    IPv4 -> IPv4: 250 ms
+    IPv4 -> IPv4: 205 ms
     LLv4 -> LLv4:   2 ms
 ~~~
 
-That can be read as a policy table, but it only takes effect in the absence of measured latency.
+That can be read as a policy table, but it only takes effect in the absence of measured latency. Also, if 
+the DA is topologically close to a current entry in _pair_list, that entry's measured latency is used. 
+'Topologically close' means an identical 32 bit prefix for IPv4, or an identical 20 bit prefix for IPv4.
 
 ### Shortfalls
     
 This code is a prototype and does not cover all possible complications. Some features are missing so far:
 
-1. Source addresses should be ignored if they stop working, to mitigate unplanned outages.
+1. The only probe used is an attempted TCP connection on port 80.
 
-2. The probe targets should be refreshed periodically, to spread load.
+2. GUAs are assumed to be off site - this is just lazy programming and should be fixed, at least by a heuristic based on a longest match.
 
-3. The only probe used is an attempted TCP connection on port 80.
+3. Non-RFC1918 IPv4 addresses are assumed to be off site - fairly safe assumption but a bit lazy too. 
 
-4. GUAs are assumed to be off site - this is just lazy programming and should be fixed, at least by a heuristic based on a longest match.
-
-5. Non-RFC1918 IPv4 addresses are assumed to be off site - fairly safe assumption but a bit lazy too. 
-
-6. Longest-match checks should be applied to ULA pairs - more lazy programming.
-
-7. There are no policy choices available.  IPv6 is always preferred if available.
+4. There are no policy choices available.  There is a 5 msec bias towards IPv6.
     
 Note for programmers: The handling of interface (a.k.a. scope or zone) identifiers is very different between the Windows and POSIX socket APIs. The code attempts to handle link local addresses consistently despite these differences, but there may be glitches.
 
