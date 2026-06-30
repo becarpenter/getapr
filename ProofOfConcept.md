@@ -37,7 +37,7 @@ The user is provided with four functions:
 
 4\. `getaddrinfo()`, which is specified exactly like `socket.getaddrinfo()` but sorts results just like `get_addr_pairs()`.
 
-The prototype was  tested on Windows 10 and Linux 5.4.0, and it needs at least Python 3.9.
+The prototype was  tested on Windows 10 and 11, and Linux 5.4.0. It needs at least Python 3.9 (tested on 3.14).
 
 See [github](https://github.com/becarpenter/getapr/) for more information and the code.
 
