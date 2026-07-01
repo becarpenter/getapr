@@ -1,6 +1,6 @@
 # Python Proof of Concept for Get Address Pairs
 
-This section describes a proof-of-concept implementation of a function to provide a socket-level replacement for `getaddrinfo()` that, instead of returning a list of possible destination addresses, returns a list of possible (source, destination) address pairs. These pairs are ordered according to a specific policy, but the upper layer (whether it is a transport protocol or an application program) is expected to try the address pairs in sequence. They are sorted based on observed or estimated round-trip latency, providing functionality similar to Happy Eyeballs, with a slight (5 msec) bias towards IPv6.. 
+This describes a proof-of-concept implementation of a function to provide a socket-level replacement for `getaddrinfo()` that, instead of returning a list of possible destination addresses, returns a list of possible (source, destination) address pairs. These pairs are ordered according to a specific policy, but the upper layer (whether it is a transport protocol or an application program) is expected to try the address pairs in sequence. They are sorted based on observed or estimated round-trip latency, providing functionality similar to Happy Eyeballs, with a slight (5 msec) bias towards IPv6.. 
 
 The implementation is coded in Python 3 and runs in user space. The module, named `getapr`, therefore has several limitations:
 
@@ -19,19 +19,25 @@ The user is provided with four functions:
 1\. `get_addr_pairs(target, port)`, which is intended to be used instead of `getaddrinfo()`. Instead of returning a list of destination addresses, it returns a list of source and destination address pairs. In practice, it actually returns a list of (AF, SA, DA) 3-tuples, where the first parameter identifies the address family of the addresses. The addresses are returned as tuples that can be passed directly to `bind()` and `connect()`. For example,  
 
 ~~~       
-    pairs = get_addr_pairs("www.example.com", 80)
-    if pairs:
-        AF, SA, DA = pairs[0]
-        user_sock = socket.socket(AF, socket.SOCK_STREAM)
-        user_sock.bind(SA)
-        user_sock.connect(DA)
+            pairs = get_addr_pairs("www.example.com", 80)
+            for pair in pairs:
+                try:
+                    AF, SA, DA = pair # try results in order
+                    user_sock = socket.socket(AF, socket.SOCK_STREAM)
+                    user_sock.bind(SA)
+                    user_sock.connect(DA)
+                    # followed by socket operations
+                    user_sock.close()
+                    break
+                except:
+                    continue
 ~~~
 
   Note that this code fragment automatically selects IPv4 or IPv6 via the AF value.  
 
-  The port parameter is used only to build the appropriate DA tuple. The user is strongly recommended to try the address pairs in sequence (not shown in this example).
+  The port parameter is used only to build the appropriate DA tuple. The user is strongly recommended to try the address pairs in sequence (not just use the first one).
     
-2\. `init_getapr()`, which initialises the state information and asynchronous processes used by    `get_addr_pairs()`. This initialisation takes at least 10 seconds including network probes. If the user does not call this function, it will be called automatically on the first call to `get_addr_pairs()`.
+2\. `init_getapr()`, which initialises the state information and asynchronous processes used by `get_addr_pairs()`. This initialisation takes at least 10 seconds including network probes. If the user does not call this function, it will be called automatically on the first call to `get_addr_pairs()`.
     
 3\. `status()`, which returns a Python dictionary indicating the detected connectivity status. For example, the status element `NPTv6` is a Boolean indicating whether an NPTv6 (or NAT66) translator was detected.
 
@@ -173,7 +179,7 @@ This code is a prototype and does not cover all possible complications. Some fea
 
 3. Non-RFC1918 IPv4 addresses are assumed to be off site - fairly safe assumption but a bit lazy too. 
 
-4. There are no policy choices available.  There is a 5 msec bias towards IPv6.
+4. There are no policy choices available. There is a 5 msec bias towards IPv6.
     
 Note for programmers: The handling of interface (a.k.a. scope or zone) identifiers is very different between the Windows and POSIX socket APIs. The code attempts to handle link local addresses consistently despite these differences, but there may be glitches.
 

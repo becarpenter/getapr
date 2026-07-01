@@ -1,6 +1,8 @@
 # getapr
 Get Address Pairs for socket programming in Python
 
+(Also see the ProofOfConcept document.)
+
 ~~~
 Help on module getapr:
 
@@ -61,31 +63,51 @@ DESCRIPTION
 FUNCTIONS
     get_addr_pairs(target, port, printing=False)
         Get source and destination address pairs for the target host.
-        The target is a domain name, or an IPv4 or IPv6 address string.
+        The 'target' is a domain name, or an IPv4 or IPv6 address string.
         A list of (AF, SA, DA) 3-tuples is returned. The list is empty
-        if no address pair is found. The AF will be socket.AF_INET
-        or socket.AF_INET6 and can be passed directly to socket.socket().
-        The addresses are returned as tuples that can be passed directly to
-        socket.bind() and socket.connect(). For example,
-
-            pairs = get_addr_pairs("www.example.com", 80)
-            if pairs:
-                AF, SA, DA = pairs[0]
-                user_sock = socket.socket(AF, socket.SOCK_STREAM)
-                user_sock.bind(SA)
-                user_sock.connect(DA)
-
-        The port parameter is used only to build the appropriate DA tuple.
+        if no address pair is found.
 
         The user is strongly recommended to try the address pairs in sequence.
-        IPv6 addresses always come first if available.
+        There is a bias towards IPv6 addresses but otherwise the addresses
+        are sorted in order of latency.
+
+        The AF will be socket.AF_INET or socket.AF_INET6 and can be passed
+        directly to socket.socket(). The addresses are returned as tuples
+        that can be passed directly to socket.bind() and socket.connect().
+
+        The 'port' parameter is used to build the appropriate DA tuples.
 
         The optional 'printing' parameter controls informational printing
         and is intended for debugging.
 
+        A lazy usage would be:
+
+            pairs = get_addr_pairs("www.example.com", 80)
+            if pairs:
+                AF, SA, DA = pairs[0] # use first result
+                user_sock = socket.socket(AF, socket.SOCK_STREAM)
+                user_sock.bind(SA)
+                user_sock.connect(DA)
+                # followed by socket operations
+                user_sock.close()
+
+        A better usage would be:
+
+            pairs = get_addr_pairs("www.example.com", 80)
+            for pair in pairs:
+                try:
+                    AF, SA, DA = pair # try results in order
+                    user_sock = socket.socket(AF, socket.SOCK_STREAM)
+                    user_sock.bind(SA)
+                    user_sock.connect(DA)
+                    # followed by socket operations
+                    user_sock.close()
+                    break
+                except:
+                    continue
+
     getaddrinfo(host, port, family=<AddressFamily.AF_UNSPEC: 0>,
-        type=0, proto=0, flags=0)
- 
+                type=0, proto=0, flags=0)
         The same as socket.getaddrinfo() but returns answers ordered as per get_addr_pairs()
 
     init_getapr(printing=False)

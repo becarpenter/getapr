@@ -630,27 +630,50 @@ def _bias(v):
 
 def get_addr_pairs(target, port, printing = False):
     """Get source and destination address pairs for the target host.
-The target is a domain name, or an IPv4 or IPv6 address string.
+The 'target' is a domain name, or an IPv4 or IPv6 address string.
 A list of (AF, SA, DA) 3-tuples is returned. The list is empty
-if no address pair is found. The AF will be socket.AF_INET
-or socket.AF_INET6 and can be passed directly to socket.socket().
-The addresses are returned as tuples that can be passed directly to
-socket.bind() and socket.connect(). For example,
+if no address pair is found.
+
+The user is strongly recommended to try the address pairs in sequence.
+There is a bias towards IPv6 addresses but otherwise the addresses
+are sorted in order of latency.
+
+The AF will be socket.AF_INET or socket.AF_INET6 and can be passed
+directly to socket.socket(). The addresses are returned as tuples
+that can be passed directly to socket.bind() and socket.connect().
+
+The 'port' parameter is used to build the appropriate DA tuples.
+
+The optional 'printing' parameter controls informational printing
+and is intended for debugging.
+
+A lazy usage would be:
 
     pairs = get_addr_pairs("www.example.com", 80)
     if pairs:
-        AF, SA, DA = pairs[0]
+        AF, SA, DA = pairs[0] # use first result
         user_sock = socket.socket(AF, socket.SOCK_STREAM)
         user_sock.bind(SA)
         user_sock.connect(DA)
+        # followed by socket operations
+        user_sock.close()
+        
+A better usage would be:
 
-The port parameter is used only to build the appropriate DA tuple.
+    pairs = get_addr_pairs("www.example.com", 80)
+    for pair in pairs:
+        try:
+            AF, SA, DA = pair # try results in order
+            user_sock = socket.socket(AF, socket.SOCK_STREAM)
+            user_sock.bind(SA)
+            user_sock.connect(DA)        
+            # followed by socket operations
+            user_sock.close()
+            break
+        except:
+            continue
 
-The user is strongly recommended to try the address pairs in sequence.
-IPv6 addresses always come first if available.
-
-The optional 'printing' parameter controls informational printing
-and is intended for debugging."""
+"""
     
     global _da_list, _pair_list
 
