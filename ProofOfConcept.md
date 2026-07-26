@@ -41,9 +41,9 @@ The user is provided with four functions:
     
 3\. `status()`, which returns a Python dictionary indicating the detected connectivity status. For example, the status element `NPTv6` is a Boolean indicating whether an NPTv6 (or NAT66) translator was detected.
 
-4\. `getaddrinfo()`, which is specified exactly like `socket.getaddrinfo()` but sorts results just like `get_addr_pairs()`.
+4\. `getaddrinfo()`, which is specified exactly like `socket.getaddrinfo()` but sorts results just like `get_addr_pairs()`. It is conceptually similar to the model proposed in [Enhanced Dual Stack: Automatic IPv6/IPv4 Selection Based on Performance](https://datatracker.ietf.org/doc/draft-xiao-v6ops-eds/).
 
-The prototype was  tested on Windows 10 and 11, and Linux 5.4.0. It needs at least Python 3.9 (tested on 3.14).
+The prototype was  tested on Windows 10 and 11, and Linux kernel 6.17.0. It needs at least Python 3.9 (tested up to 3.14), and `ripe.atlas.cousteau` installed via `pip` or `apt-get`.
 
 See [github](https://github.com/becarpenter/getapr/) for more information and the code.
 

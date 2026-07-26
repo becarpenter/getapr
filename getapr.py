@@ -8,10 +8,12 @@ operating system choosing an inappropriate source address.
 Nevertheless, upper layer code needs to cycle through the list
 of address pairs until it makes a successful connection.
 
-The module also provided getapr.getaddrinfo() which works
+The module also provides getapr.getaddrinfo() which works
 exactly like socket.getaddrinfo() except that it orders the
-destination addresses using get_addr_pairs(). In many cases,
-this will have the same effect as using get_addr_pairs().
+destination addresses using get_addr_pairs() if possible,
+while respecting AF_UNSPEC, AF_INET, and AF_INET6. In cases
+where this is impossible, the response will be exactly as
+from socket.getaddrinfo().
 
 The module also provides getapr.init_getapr() which initialises
 the state information and asynchronous processes used by
@@ -102,6 +104,7 @@ may be glitches.
 #          5 ms bias towards IPv6 instead of absolute preference
 # 20260630 latency of known destination used for topologically
 #          close new destination
+# 20260726 improved getaddrinfo() to handle AFINET and AFINET6 better
 
 import os
 import time
@@ -877,17 +880,20 @@ def status():
      "ULA_present": ULA_present, "NPTv6": NPTv6, "RFC1918": RFC1918, "NAT44": NAT44})
 
 def getaddrinfo(host, port, family=socket.AF_UNSPEC, type=0, proto=0, flags=0):
-    """The same as socket.getaddrinfo() but returns answers ordered as per get_addr_pairs()"""
+    """The same as socket.getaddrinfo() but returns answers ordered as per get_addr_pairs()
+       if possible."""
 
-    if family != socket.AF_UNSPEC or type or proto or flags:
-        # not a simple dual stack call, just process it normally
+    if type or proto or flags or not (family in (socket.AF_UNSPEC, socket.AF_INET, socket.AF_INET6)):
+        # not a simple call, just process it normally
         return(socket.getaddrinfo(host, port, family, type, proto, flags))
+    dual = (family == socket.AF_UNSPEC)
     # invoke address pair mechansim
     pairs = get_addr_pairs(host, port)
     # convert to traditional form (i.e. discard source addresses)
     reply = []
     for pair in pairs:
-        reply.append((pair[0], 0, 0, '', pair[2]))
+        if dual or (family == pair[0]):
+            reply.append((pair[0], 0, 0, '', pair[2]))
     return(reply)
                 
 

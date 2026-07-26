@@ -106,8 +106,14 @@ FUNCTIONS
                 except:
                     continue
 
-    getaddrinfo(host, port, family=<AddressFamily.AF_UNSPEC: 0>,
-                type=0, proto=0, flags=0)
+    getaddrinfo(
+        host,
+        port,
+        family=<AddressFamily.AF_UNSPEC: 0>,
+        type=0,
+        proto=0,
+        flags=0
+    )
         The same as socket.getaddrinfo() but returns answers ordered as per get_addr_pairs()
 
     init_getapr(printing=False)
