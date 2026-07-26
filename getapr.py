@@ -43,8 +43,9 @@ the new one in the top 32 bits (IPv6) or 20 bits (IPv4), its
 existing latency is used for the new one, to reflect their
 probable topological closeness.
 
-The prototype was  tested on Windows 10 and 11, and Linux 5.4.0,
-and it needs at least Python 3.9 (tested up to 3.14).
+The prototype was  tested on Windows 10 and 11, and Linux kernel 6.17.0.
+It needs at least Python 3.9 (tested up to 3.14), and `ripe.atlas.cousteau`
+installed via `pip` or `apt-get`.
 
 Note for programmers: The handling of interface (a.k.a. scope
 or zone) identifiers is very different between the Windows
