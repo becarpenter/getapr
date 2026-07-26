@@ -1,7 +1,7 @@
 # getapr
 Get Address Pairs for socket programming in Python
 
-(Also see the ProofOfConcept document.)
+(Also see the [Proof of Concept](ProofOfConcept.md) document.)
 
 ~~~
 Help on module getapr:
