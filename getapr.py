@@ -982,7 +982,7 @@ Initialisation takes at least 10 seconds and includes network probes."""
     _share().start()
     _getapr_initialised = True
 
-    # Return from init_getapr; 2 threads continue indefinitely
+    # Return from init_getapr; 3 threads continue indefinitely
 
 def status():
     """Returns dictionary showing detected connectivity status."""
