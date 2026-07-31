@@ -8,7 +8,7 @@ The implementation is coded in Python 3 and runs in user space. The module, name
 
 2. Only available to Python applications.
 
-3. Information gleaned for one application cannot be re-used by another.
+3. ~~Information gleaned for one application cannot be re-used by another.~~ Fixed!
 
 4. No access to kernel data within the IPv6 and IPv4 stacks.
 
@@ -124,7 +124,7 @@ The `_monitor` thread also generates log output when logging is enabled. Its mai
 
 ### Share Thread
 
-This thread creates an empty `share-apr.bin` if necessary. Then approximately every 5 minutes, it merges its own `pair_list` into the shared list, and vice versa, such that all instances of `getapr` in the operating system will share the same measured latency information. However, if the shared list has not been updated within the last hour, it will be flushed. This background process is completely decoupled from other operations, apart from briefly locking `_pair_list` for certain atomic operations.
+This thread creates an empty `share-apr.bin` if necessary. Then approximately every 5 minutes, it merges its own `_pair_list` into the shared list, and vice versa, such that all instances of `getapr` in the operating system will share the same measured latency information. However, if the shared list has not been updated within the last hour, it will be flushed. This background process is completely decoupled from other operations, apart from briefly locking `_pair_list` for certain atomic operations.
 
 ### Get Address Pairs Function
 
