@@ -43,6 +43,10 @@ the new one in the top 32 bits (IPv6) or 20 bits (IPv4), its
 existing latency is used for the new one, to reflect their
 probable topological closeness.
 
+The current list of known address pairs and latencies is shared
+with other instances of getapr via a system-wide file, so that
+all instances benefit from each other's latency measurements.
+
 The prototype was  tested on Windows 10 and 11, and Linux kernel 6.17.0.
 It needs at least Python 3.9 (tested up to 3.14), and `ripe.atlas.cousteau`
 installed via `pip` or `apt-get`.
@@ -106,16 +110,19 @@ may be glitches.
 # 20260630 latency of known destination used for topologically
 #          close new destination
 # 20260726 improved getaddrinfo() to handle AFINET and AFINET6 better
+# 20260731 share pairs lists system-wide
 
 import os
 import time
 import socket
-import ipaddress
+from ipaddress import ip_address, IPv6Address, IPv4Address
 import threading
 import subprocess
 import binascii
 import random
 import copy
+import cbor
+from oslock import get_lock, release_lock
 
 ####################################################
 # import Atlas probe API                           #
@@ -196,7 +203,8 @@ def_gateway6 = None
 _timeout = 5        ### timeout for connect attempts (s) 
 _latency6 = 200     ### default latency for IPv6 (ms) 
 _latency4 = 205     ### default latency for IPv4 (ms) 
-_bias6 = 5          ### bias in favour of IPv6 (ms) 
+_bias6 = 5          ### bias in favour of IPv6 (ms)
+_share_timeout = 3600   ### shared list timeout (s)
     
 NPTv6 = False       #NPTv6 or NAPT66 assumed absent by default
 NAT44 = False       #NAPT44 assumed absent by default
@@ -248,7 +256,7 @@ def _pick_probes():
         try:
             _probe = Probe(id=_tryp)
             if _probe.is_anchor and _probe.status == 'Connected' and _probe.address_v6:
-                _target6 = ipaddress.IPv6Address(_probe.address_v6)
+                _target6 = IPv6Address(_probe.address_v6)
                 break
         except:
             pass
@@ -257,7 +265,7 @@ def _pick_probes():
         try:
             _probe = Probe(id=_tryp)
             if _probe.is_anchor and _probe.status == 'Connected' and _probe.address_v4:
-                _target4 = ipaddress.IPv4Address(_probe.address_v4)
+                _target4 = IPv4Address(_probe.address_v4)
                 break
         except:
             pass
@@ -279,20 +287,20 @@ def _update_sources():
         for _af,_temp1,_temp2,_temp3,_addr in _addrinfo:
             if _af == socket.AF_INET6:
                 _addr,_temp,_temp,_zid = _addr  #get first item from tuple
-                _loc = ipaddress.IPv6Address(_addr)
+                _loc = IPv6Address(_addr)
                 if _loc.is_loopback:
                     continue
                 if (not '%' in _addr) and _loc.is_link_local:
                     #this applies on Windows for Python 3.7 upwards
                     _addr += "%"+str(_zid)
-                    _loc = ipaddress.IPv6Address(_addr)
+                    _loc = IPv6Address(_addr)
                 if _is_ula(_loc):
                     ULA_present = True
                 _sa_list.append(_loc)
                     
             elif _af == socket.AF_INET:
                 _addr,_temp = _addr  #get first item from tuple
-                _loc = ipaddress.IPv4Address(_addr)
+                _loc = IPv4Address(_addr)
                 if _loc.is_loopback:
                     continue
                 if _loc.is_private:
@@ -304,11 +312,11 @@ def _update_sources():
             _s = str(l)
             if _ing:
                 if _s.startswith("                                      "):
-                   def_gateway4 = ipaddress.ip_address(_s.strip())
+                   def_gateway4 = ip_address(_s.strip())
                 _ing = False
             elif "Default Gateway" in _s:
                 _ing = True
-                def_gateway6 = ipaddress.ip_address(_s.split(" ")[-1].strip())           
+                def_gateway6 = ip_address(_s.split(" ")[-1].strip())           
     else:
         # Assume POSIX
         ifs = netifaces.interfaces()
@@ -318,7 +326,7 @@ def _update_sources():
                 for link in config[netifaces.AF_INET6]:
                     if 'addr' in link.keys():
                         _addr = link['addr']
-                        _loc = ipaddress.IPv6Address(_addr)
+                        _loc = IPv6Address(_addr)
                         if _loc.is_loopback:
                             continue
                         if _is_ula(_loc):
@@ -328,7 +336,7 @@ def _update_sources():
                 for link in config[netifaces.AF_INET]:
                     if 'addr' in link.keys():
                         _addr = link['addr']
-                        _loc = ipaddress.IPv4Address(_addr)
+                        _loc = IPv4Address(_addr)
                         if _loc.is_loopback:
                             continue
                         if _loc.is_private:
@@ -337,13 +345,13 @@ def _update_sources():
         # Get default gateways
         gateways = netifaces.gateways()
         try:
-            def_gateway4 = ipaddress.IPv4Address(gateways['default'][netifaces.AF_INET][0])
+            def_gateway4 = IPv4Address(gateways['default'][netifaces.AF_INET][0])
         except:
             pass
         try:
             _gwa = gateways['default'][netifaces.AF_INET6][0]
             _zid = gateways['default'][netifaces.AF_INET6][1]
-            def_gateway6 = ipaddress.IPv6Address(_gwa+"%"+_zid)        
+            def_gateway6 = IPv6Address(_gwa+"%"+_zid)        
         except:
             pass
 
@@ -386,10 +394,10 @@ def _ok(sa, da):
                 #must split interface index off because Linux is fussy ... but not for Windows
                 if os.name != "nt":
                     sa,zid = str(sa).split("%")
-                    sa = ipaddress.IPv6Address(sa)
+                    sa = IPv6Address(sa)
                     zid = socket.if_nametoindex(zid) #convert to numeric
                     da,_ = str(da).split("%")
-                    da = ipaddress.IPv6Address(da)
+                    da = IPv6Address(da)
                     #print("!LLA", sa, da, zid)
             
             if _is_ula(sa) and not _is_ula(da):
@@ -554,27 +562,27 @@ class _monitor(threading.Thread):
             
 ##            if _poll_count >= 1 and not _test_done:
 ##                _da_list_lock.acquire()
-##                _da_list += [ipaddress.IPv6Address("fd63:45eb:dc14:0:2e3a:fdff:fea4:dde7")]
+##                _da_list += [IPv6Address("fd63:45eb:dc14:0:2e3a:fdff:fea4:dde7")]
 ##                                                    #replace with a locally valid ULA
 ##                #print("added dest", _da_list[-1])
 ##
 ####                #...and destination list purging.
 ####                #If you uncomment this, there will be long delays
 ####                #while pointlessly probing these addresses.
-####                _da_list += [ipaddress.IPv6Address("2001:db8:abcd:0101::abc1"),
-####                             ipaddress.IPv6Address("2001:db8:b123:0101::def2"),
-####                             ipaddress.IPv6Address("2001:db8:abcd:0101::abc2"),
-####                             ipaddress.IPv6Address("2001:db8:b123:0101::def3"),
-####                             ipaddress.IPv6Address("2001:db8:abcd:0101::abc3"),
-####                             ipaddress.IPv6Address("2001:db8:b123:0101::def4"),
-####                             ipaddress.IPv6Address("2001:db8:abcd:0101::abc4"),
-####                             ipaddress.IPv6Address("2001:db8:b123:0101::def5"),
-####                             ipaddress.IPv6Address("2001:db8:abcd:0101::abc5"),
-####                             ipaddress.IPv6Address("2001:db8:b123:0101::def6"),
-####                             ipaddress.IPv6Address("2001:db8:abcd:0101::abc6"),
-####                             ipaddress.IPv6Address("2001:db8:b123:0101::def7"),
-####                             ipaddress.IPv6Address("2001:db8:abcd:0101::abc7"),
-####                             ipaddress.IPv6Address("2001:db8:b123:0101::def8")]
+####                _da_list += [IPv6Address("2001:db8:abcd:0101::abc1"),
+####                             IPv6Address("2001:db8:b123:0101::def2"),
+####                             IPv6Address("2001:db8:abcd:0101::abc2"),
+####                             IPv6Address("2001:db8:b123:0101::def3"),
+####                             IPv6Address("2001:db8:abcd:0101::abc3"),
+####                             IPv6Address("2001:db8:b123:0101::def4"),
+####                             IPv6Address("2001:db8:abcd:0101::abc4"),
+####                             IPv6Address("2001:db8:b123:0101::def5"),
+####                             IPv6Address("2001:db8:abcd:0101::abc5"),
+####                             IPv6Address("2001:db8:b123:0101::def6"),
+####                             IPv6Address("2001:db8:abcd:0101::abc6"),
+####                             IPv6Address("2001:db8:b123:0101::def7"),
+####                             IPv6Address("2001:db8:abcd:0101::abc7"),
+####                             IPv6Address("2001:db8:b123:0101::def8")]
 ##
 ##                _da_list_lock.release()
 ##                _test_done = True
@@ -595,7 +603,7 @@ class _monitor(threading.Thread):
             if not _poll_count%60:
                 # get new Atlas probes and add to destination list every 10 minutes
                 target6n, target4n = _pick_probes()
-                print("Adding probes", target6n, target4n)
+                _log("Adding probes", target6n, target4n)
                 _da_list_lock.acquire()
                 if target6n:
                     _da_list.append(target6n)
@@ -607,6 +615,107 @@ class _monitor(threading.Thread):
 
             if _poll_count < 3 or not _poll_count%10:
                 _logging = True
+
+def _convert(pair_list):
+    """Support function for _share - convert a pair list to cborable format"""
+    cbor_list = []
+    for p in pair_list:
+        if not p.sa.is_link_local: # link-locals must not be shared
+            cbor_list.append([p.sa.packed, p.da.packed, p.latency])
+    return(cbor_list)
+
+def _pair_in(pair, pair_list):
+    """Support function for _share - is pair in list?"""
+    for p in pair_list:
+        if pair.sa == p.sa and pair.da == p.da:
+            return(True)
+    return(False)
+
+class _share(threading.Thread):
+    """Share pair list system-wide"""
+####################################################
+# This thread shares address pairs system-wide,    #
+# blending information from other instances of     #
+# getapr.                                          #
+####################################################
+
+    def __init__(self):
+        threading.Thread.__init__(self, daemon=True)
+                
+    def run(self):
+        global _pair_list
+
+        time.sleep(60)  # Allow all other initialisation to complete
+        
+        # Does the system-wide file exist? If not, create it
+        if os.name=="nt":
+            swfn = "C:/ProgramData/Temp/share-apr.bin"
+        else:
+            swfn = "/tmp/share-apr.bin"
+        if not os.path.exists(swfn):
+            open(swfn, 'w').close()  # create empty file
+        
+        while True:
+            time.sleep(_prng.randint(240, 360)) # random wait about 5 minutes
+            #print("In share")
+            if get_lock():
+                # We have the system-wide lock so we can work on the file
+                #print("Share locked")
+                # Is the file too old to be useful?
+                if (time.time() - os.path.getmtime(swfn)) > _share_timeout:
+                    open(swfn, 'w').close()  # re-create empty file
+                    _log("Cleared stale share")
+                    raw = False
+                else:
+                    raw = open(swfn, 'rb').read()
+                if raw:
+                    # Convert shared list to pair list format
+                    shared_pl = []
+                    for p in cbor.loads(raw):
+                        shared_pl.append(_addr_pair(ip_address(p[0]),ip_address(p[1]),p[2]))
+                    #print("Share read", shared_pl)
+
+                    # Now do a smart merge with _pair_list and write back if necessary
+                    new_share = []  # will be new entries for shared list
+                    new_pairs = []  # will be new entries for _pair_list
+                    news = False    # will indicate if shared list is different
+                    newp = False    # will indicate if _pair_list is different
+                    _pair_list_lock.acquire()
+                    for p in shared_pl:
+                        # add any unknown shared pairs
+                        if not _pair_in(p, _pair_list):
+                            newp = True
+                            new_pairs.append(p)
+                    for p in _pair_list:
+                        # add any unshared pairs, but link-locals must not be shared
+                        if (not p.sa.is_link_local) and (not _pair_in(p, shared_pl)):
+                            news = True
+                            new_share.append(p)
+                    if newp:
+                        # Need to update _pair_list
+                        _pair_list += new_pairs
+                    _pair_list_lock.release()
+
+                    if news:
+                        # Need to update shared list
+                        shared_pl += new_share
+                        # Write to file as CBOR
+                        open(swfn, 'wb').write(cbor.dumps(_convert(shared_pl)))
+                        _log("Updated share written", shared_pl)
+                else:
+                    # File is empty
+                    # Convert current pair list for CBOR usage
+                    _pair_list_lock.acquire()
+                    share_cbor = _convert(_pair_list)
+                    _pair_list_lock.release()
+                    # Write to file as CBOR
+                    open(swfn, 'wb').write(cbor.dumps(share_cbor))
+                    _log("Initial share written")
+                # Done with the file
+                release_lock()
+                #print("Unlocked")
+            # else we skip this time and try later
+            
 
 def _lmatch(a1, a2):
     # do two addresses match enough to copy latency?
@@ -689,7 +798,7 @@ A better usage would be:
     if target:        #we do not handle a null host
 
         try:
-            das.append(ipaddress.ip_address(target))
+            das.append(ip_address(target))
             #the user supplied an address
         except:         
             try:
@@ -703,10 +812,10 @@ A better usage would be:
             #collate, ensuring IPv6 is always first
             for item in ainf:
                 if item[0].name == 'AF_INET6':
-                    das.append(ipaddress.ip_address(item[4][0]))
+                    das.append(ip_address(item[4][0]))
             for item in ainf:
                 if item[0].name == 'AF_INET':
-                    das.append(ipaddress.ip_address(item[4][0]))
+                    das.append(ip_address(item[4][0]))
                 
         #process list of destinations (if any)
         for da in das:
@@ -847,10 +956,10 @@ Initialisation takes at least 10 seconds and includes network probes."""
     target6, target4 = _pick_probes()
     #in case things are desparate...
     if not target6:
-        target6 = ipaddress.IPv6Address(socket.getaddrinfo("ipv6.lookup.test-ipv6.com",80)[0][4][0])
+        target6 = IPv6Address(socket.getaddrinfo("ipv6.lookup.test-ipv6.com",80)[0][4][0])
         _log("Couldn't get IPv6 probe target, using ipv6.lookup.test-ipv6.com")
     if not target4:
-        target4 = ipaddress.IPv4Address(socket.getaddrinfo("ipv4.lookup.test-ipv6.com",80)[0][4][0])
+        target4 = IPv4Address(socket.getaddrinfo("ipv4.lookup.test-ipv6.com",80)[0][4][0])
         _log("Couldn't get IPv4 probe target, using ipv4.lookup.test-ipv6.com")
         
     _log("...chose", target6, "and", target4)
@@ -870,6 +979,7 @@ Initialisation takes at least 10 seconds and includes network probes."""
     while _poll_count == 0:
         #wait until first poll complete
         time.sleep(1)
+    _share().start()
     _getapr_initialised = True
 
     # Return from init_getapr; 2 threads continue indefinitely

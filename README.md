@@ -1,7 +1,7 @@
 # getapr
 Get Address Pairs for socket programming in Python
 
-(Also see the [Proof of Concept](ProofOfConcept.md) document.)
+(Also see the ProofOfConcept document.)
 
 ~~~
 Help on module getapr:
@@ -52,6 +52,10 @@ DESCRIPTION
     the new one in the top 32 bits (IPv6) or 20 bits (IPv4), its
     existing latency is used for the new one, to reflect their
     probable topological closeness.
+
+    The current list of known address pairs and latencies is shared
+    with other instances of getapr via a system-wide file, so that
+    all instances benefit from each other's latency measurements.
 
     The prototype was  tested on Windows 10 and 11, and Linux kernel 6.17.0.
     It needs at least Python 3.9 (tested up to 3.14), and `ripe.atlas.cousteau`

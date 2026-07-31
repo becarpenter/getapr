@@ -49,7 +49,7 @@ See [github](https://github.com/becarpenter/getapr/) for more information and th
 
 ## Code description
 
-There are some global data structures used throughout the code, protected by concurrency locks when necessary. The code includes two indefinitely running threads, `_poll` and `_monitor`, as well as the user-callable functions. 
+There are some global data structures used throughout the code, protected by concurrency locks when necessary. The code includes three indefinitely running threads, `_poll`, `_monitor` and `_share`, as well as the user-callable functions. 
 
 ### Data Structures
 
@@ -60,6 +60,8 @@ The most important data structures are:
  - `_da_list`, a list of destination addresses (DA) to test. This is not static, see later.
 
  - `_pair_list`, a dynamic list of successful address pairs with associated latency.
+
+Additionally, a system-wide file `share-apr.bin` is used so that all instances of `getapr` active in the same system can share their pair lists and thereby learn from each other. The file is in a CBOR-encoded format of all versions of `_pair_list` (with link-local addresses removed). A system-wide lock is used to perform atomic operations on `share-apr.bin`. This file is in `/tmp` on Linux and in `C:\ProgramData\Temp` on Windows.
 
 ### Initialization
 
@@ -73,7 +75,7 @@ When the package is initialized (by calling `init_getapr()` or by the first call
 
 4. An empty `_pair_list` is created.
 
-5. The `_poll` and `_monitor` threads are started.
+5. The `_poll`, `_monitor` and `_share` threads are started.
 
 ### Polling Thread
 
@@ -119,6 +121,10 @@ The main purposes of `_monitor` are:
 3. Periodically select new Atlas probes as targets, to spread load.
 
 The `_monitor` thread also generates log output when logging is enabled. Its main loop is repeated every ten seconds.
+
+### Share Thread
+
+This thread creates an empty `share-apr.bin` if necessary. Then approximately every 5 minutes, it merges its own `pair_list` into the shared list, and vice versa, such that all instances of `getapr` in the operating system will share the same measured latency information. However, if the shared list has not been updated within the last hour, it will be flushed. This background process is completely decoupled from other operations, apart from briefly locking `_pair_list` for certain atomic operations.
 
 ### Get Address Pairs Function
 
@@ -175,9 +181,9 @@ This code is a prototype and does not cover all possible complications. Some fea
 
 1. The only probe used is an attempted TCP connection on port 80.
 
-2. GUAs are assumed to be off site - this is just lazy programming and should be fixed, at least by a heuristic based on a longest match.
+2. GUAs are assumed to be off site - this is just lazy programming. It is mitigated by a heuristic based on a longest match.
 
-3. Non-RFC1918 IPv4 addresses are assumed to be off site - fairly safe assumption but a bit lazy too. 
+3. Non-RFC1918 IPv4 addresses are assumed to be off site - a fairly safe assumption but a bit lazy too. 
 
 4. There are no policy choices available. There is a 5 msec bias towards IPv6.
     
