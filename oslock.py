@@ -5,7 +5,7 @@
 by binding to a dummy socket."""
 
 # Version: 2026-07-28 - original
-
+# Version: 2026-08-02 - able to run without sudo on Linux
 
 ########################################################
 # Copyright (C) 2026 Brian E. Carpenter.                  
@@ -48,10 +48,13 @@ by binding to a dummy socket."""
 ########################################################
 
 import socket
+import os
 _sock = None     # Need this to be global
 _port_used = 0   # Need this to be global
 
-def get_lock(port=1021):
+_def_port = 1021 if os.name=="nt" else 1181 # theoretically assigned to 3com
+
+def get_lock(port=_def_port):
     """Get an operating-system lock to allow atomic operation.
 By default it uses experimental port 1021. Any unused port number
 will work, but all processes using the same lock must use the same
@@ -70,7 +73,7 @@ port number. Returns True if successful, otherwise False."""
         #print("Could not get lock")
         return(False)
 
-def release_lock(port=1021):
+def release_lock(port=_def_port):
     """Release lock after atomic operation.
 Returns True if successful, otherwise False."""
 

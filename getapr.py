@@ -111,6 +111,7 @@ may be glitches.
 #          close new destination
 # 20260726 improved getaddrinfo() to handle AFINET and AFINET6 better
 # 20260731 share pairs lists system-wide
+# 20260802 use cbor2 if possible
 
 import os
 import time
@@ -121,7 +122,10 @@ import subprocess
 import binascii
 import random
 import copy
-import cbor
+try:
+    import cbor2 as cbor
+else:
+    import cbor
 from oslock import get_lock, release_lock
 
 ####################################################
